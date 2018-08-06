@@ -6,6 +6,7 @@ import datetime
 import contextlib
 import requests
 import logging
+import json
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,24 @@ class TangerineClient(object):
         response = self.session.get(url)
         response.raise_for_status()
         return response.json()
+
+    def _api_post(self, path, data):
+
+        transaction_token = self.session.cookies.get('TRANSACTION_TOKEN')
+        resp = self.session.post(
+            'https://secure.tangerine.ca/web/rest{}'.format(path),
+            headers={
+                'x-web-flavour': 'fbe',
+                'Accept': 'application/json',
+                'Origin': 'https://www.tangerine.ca',
+                'Referrer': 'https://www.tangerine.ca/app/',
+                'User-Agent': 'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:57.0) Gecko/20100101 Firefox/57.0',
+                'x-transaction-token': transaction_token
+            },
+            json=data)
+        resp.raise_for_status()
+        logger.debug(resp.text)
+        return resp
 
     @contextlib.contextmanager
     def login(self):
@@ -80,6 +99,17 @@ class TangerineClient(object):
             'include-mf-transactions': 'true',
         }
         return self._api_get('/v1/customers/my/pending-transactions?{}'.format(urlencode(params)))
+
+    @api_response('recipient')
+    def list_email_recipients(self):
+        return self._api_get('/v1/customers/my/emt-recipients')
+
+    @api_response()
+    def list_move_money_accounts(self):
+        params = {
+            'actionCode': 'MOVE_MONEY'
+        }
+        return self._api_get('/v1/customers/my/accounts?{}'.format(urlencode(params)))
 
     @api_response('token', check_response_status=False)
     def _get_transaction_download_token(self):
@@ -144,3 +174,46 @@ class TangerineClient(object):
             return local_filename
         else:
             return response.text
+
+    @api_response()
+    def move_money(self, account_id, from_account, to_account, amount: float, currency, when):
+        path = '/v1/accounts/{}/transactions/movemoney'.format(account_id)
+        data = {
+            'transfers': {
+                'when': when,
+                'amount': amount,
+                'to_account': to_account,
+                'from_account': from_account,
+                'currency': currency
+            },
+            'validate_only': False
+        }
+        print(data)
+
+        response = self._api_post(path, data)
+        print(response.json())
+
+    @api_response()
+    def email_money(self,
+                    source_account_number,
+                    recipient_sequence_number,
+                    amount,
+                    when,
+                    scheduled_date: datetime.date,
+                    emt_type='INTERAC_EMT'):
+        path = '/v1/accounts/{}/transactions/emts'.format(source_account_number)
+        data = {
+            'validate_only': False,
+            'emt': {
+                'emt_type': emt_type,
+                'amount': amount,
+                'recipient_sequence_number': recipient_sequence_number,
+                'message': '',
+                'accepted_terms_and_conditions': True,
+                'when': when,
+                'scheduled_date': scheduled_date.strftime('%Y-%m-%d')
+            }
+        }
+
+        response = self._api_post(path, data)
+        print(response.json())
